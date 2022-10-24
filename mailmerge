@@ -1,0 +1,90 @@
+#!/usr/bin/env python3
+
+import base64
+import csv
+import email
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+import getpass
+import imaplib
+from io import StringIO
+from string import Template
+import sys
+import time
+import yaml
+
+try:
+    assert len(sys.argv) == 2
+    with open(sys.argv[1], "r") as fh:
+        template = fh.read()
+except Exception:
+    print("""
+USAGE: mailmerge TEMPLATE_FILE
+
+The TEMPLATE_FILE should have these three sections divided by two lines
+containing the seperator token #---#.  These sections contain:
+
+  1. Header variables (from, subject) in YAML format,
+  2. The email body in Python string template format, and
+  3. Tab seperated values (TSV) to sub into (1) and (2) with labeled columns
+
+Two column names in the TSV file have special meaning.  The 'email' column
+will be the recipient.  The 'cc' column, if present, will be CCed.
+""")
+    sys.exit(1)
+
+header, body, data = template.split("#---#")
+
+header = yaml.safe_load(header)
+
+# The input could include unicode or extra spaces so we clean all that
+# up starting with the YAML header
+for field in ("subject", "from"):
+    try:
+        header[field] = header[field].encode("ascii", "ignore").decode(). \
+            strip()
+    except Exception:
+        print("Error: '" + field + "' is a required header field.")
+        exit(1)
+
+# And then the body
+body = body.encode("ascii", "ignore").decode().strip()
+
+messages = []
+for entry in csv.DictReader(StringIO(data.strip()), dialect='excel-tab'):
+
+    # Remove any unicode from the data
+    safe_entry = {}
+    for field in entry:
+        safe_field = field.encode("ascii", "ignore").decode().strip()
+        safe_entry[safe_field] = entry[field].encode("ascii", "ignore").decode().strip()
+    entry = safe_entry
+
+    # Construct the message
+    message = MIMEMultipart()
+    message['Subject'] = Template(header["subject"]).substitute(entry)
+    message['From'] = header["from"]
+    try:
+        message['To'] = entry["email"]
+    except Exception:
+        print("'email' is a required field in the TSV data.")
+        exit(1)
+    if 'cc' in entry:
+        message['Cc'] = entry['cc']
+    message_body = Template(body).substitute(entry)
+    message.attach(MIMEText(message_body, 'plain'))
+    messages.append(message)
+
+    # Preview the message
+    print(message)
+
+# Once we have a list of messages, we try to post them to the Drafts folder
+pw = getpass.getpass("password: ").strip()
+conn = imaplib.IMAP4_SSL('imap.gmail.com', port=993)
+conn.login(header['from'], pw)
+conn.select('[Gmail]/Drafts')
+
+for message in messages:
+    message = message.as_bytes()
+    conn.append("[Gmail]/Drafts", '', imaplib.Time2Internaldate(time.time()),
+                message)
