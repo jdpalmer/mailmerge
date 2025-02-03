@@ -25,4 +25,4 @@ containing the seperator token #---#.  These sections contain:
 Two column names in the TSV file have special meaning.  The 'email' column
 will be the recipient.  The 'cc' column, if present, will be CCed.
 
-An example is provided.
+A working example is provided.
